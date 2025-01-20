@@ -1,0 +1,11 @@
+# Ignore Python virtual environments
+venv/
+__pycache__/
+
+# Ignore Node.js dependencies
+node_modules/
+package-lock.json
+
+# Ignore API keys and environment variables
+*.env
+.env
