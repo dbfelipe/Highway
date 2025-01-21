@@ -19,6 +19,8 @@ def initialize_database():
             longitude REAL,
             rating REAL,
             user_ratings_total INTEGER,
+            phone_number TEXT,
+            website TEXT,
             denomination TEXT DEFAULT 'Unknown',
             worship_style TEXT DEFAULT 'Unknown',
             language TEXT DEFAULT 'Unknown',
@@ -51,54 +53,95 @@ def fetch_churches(location, radius=5000, pagetoken=None):
         print(f"Error: {response.status_code}, {response.text}")
         return None
 
+def fetch_place_details(place_id):
+    url = "https://maps.googleapis.com/maps/api/place/details/json"
+    params = {
+        "place_id": place_id,
+        "fields": "name,formatted_address,website,formatted_phone_number,types",
+        "key": API_KEY
+    }
+    
+    response = requests.get(url, params=params)
+    
+    if response.status_code == 200:
+        return response.json().get("result", {})  # Return the detailed result
+    else:
+        print(f"Error fetching details for {place_id}: {response.status_code}")
+        return {}
+
 
 def save_churches(data, conn):
     cursor = conn.cursor()
+
     for result in data.get("results", []):
         if not result.get("name") or not result.get("vicinity"):
-            continue  # Skip this result if name or vicinity is missing
+            continue  # Skip if name or address is missing
+
+        place_id = result.get("place_id")
+        place_details = fetch_place_details(place_id)  # Fetch more details
+        
+        # Ensure default values if Place Details API doesn't return them
+        phone_number = place_details.get("formatted_phone_number", "Unknown")
+        website = place_details.get("website", "Unknown")  # Fix: Handle missing website
+
+        print(f"Inserting: {result.get('name')} - Phone: {phone_number}, Website: {website}")  # Debugging
+
         try:
             cursor.execute('''
                 INSERT OR IGNORE INTO churches (
-                    id, name, address, latitude, longitude, rating, user_ratings_total, denomination, worship_style, language, size
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, name, address, latitude, longitude, rating, user_ratings_total, phone_number, website, denomination, worship_style, language, size
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                result.get("place_id"),
+                place_id,
                 result.get("name"),
                 result.get("vicinity"),
                 result["geometry"]["location"]["lat"],
                 result["geometry"]["location"]["lng"],
                 result.get("rating"),
                 result.get("user_ratings_total"),
+                phone_number,  # Ensures this field is always present
+                website,  # Ensures this field is always present
                 "Unknown",  # Default denomination
                 "Unknown",  # Default worship style
                 "Unknown",  # Default language
                 "Unknown"   # Default size
-))
+            ))
         except Exception as e:
             print(f"Error inserting data: {e}")
+    
     conn.commit()
 
 def main():
-    # City coordinates
-    city_location = "35.158985377826724, -84.87618196353363"  #Cleveland, Tennessee
+    # Define multiple locations within Cleveland & Chattanooga to cover more ground
+    locations = [
+        "35.1595,-84.8766",  # Downtown Cleveland, TN
+        "35.1749,-84.8652",  # North Cleveland, TN
+        "35.1450,-84.8885",  # South Cleveland, TN
+        "35.0456,-85.3097",  # Downtown Chattanooga, TN
+        "35.0729,-85.2914",  # East Chattanooga, TN
+        "35.0173,-85.2625",  # South Chattanooga, TN
+    ]
+
     conn = initialize_database()
 
-    # Fetch data
-    data = fetch_churches(city_location)
-    if data:
-        save_churches(data, conn)
+    for city_location in locations:
+        print(f"Fetching churches near {city_location}...")
+        data = fetch_churches(city_location, radius=5000)  # Smaller radius to avoid hitting the 60-limit
 
-        # Handle pagination if more results are available
-        next_page_token = data.get("next_page_token")
-        while next_page_token:
-            print("Fetching next page...")
-            time.sleep(2)  # Google requires a short delay before using the token
-            data = fetch_churches(city_location, pagetoken=next_page_token)
+        if data:
             save_churches(data, conn)
+
+            # Handle pagination for more results
             next_page_token = data.get("next_page_token")
+            while next_page_token:
+                print("Fetching next page...")
+                time.sleep(2)  # Required delay
+                data = fetch_churches(city_location, radius=5000, pagetoken=next_page_token)
+                save_churches(data, conn)
+                next_page_token = data.get("next_page_token")
 
     conn.close()
+
 
 if __name__ == "__main__":
     main()
